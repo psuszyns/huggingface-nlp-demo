@@ -14,13 +14,13 @@ import nlp
 import transformers
 
 flags.DEFINE_boolean('debug', False, '')
-flags.DEFINE_integer('epochs', 10, '')
-flags.DEFINE_integer('batch_size', 8, '')
+flags.DEFINE_integer('epochs', 50, '')
+flags.DEFINE_integer('batch_size', 128, '')
 flags.DEFINE_float('lr', 3e-3, '')
 flags.DEFINE_float('momentum', .9, '')
 flags.DEFINE_string('model', 'bert-base-uncased', '')
 flags.DEFINE_integer('seq_length', 32, '')
-flags.DEFINE_integer('percent', 5, '')
+flags.DEFINE_integer('percent', 10, '')
 
 FLAGS = flags.FLAGS
 
@@ -59,8 +59,11 @@ class CustomPythonFormatter(PythonFormatter):
 
 
 class IMDBSentimentClassifier(pl.LightningModule):
-    def __init__(self):
+    def __init__(self, learning_rate):
         super().__init__()
+        self.learning_rate = learning_rate
+        self.save_hyperparameters('learning_rate')
+
         self.model = transformers.BertForSequenceClassification.from_pretrained(FLAGS.model)
         self.loss = th.nn.CrossEntropyLoss(reduction='none')
 
@@ -117,6 +120,7 @@ class IMDBSentimentClassifier(pl.LightningModule):
         loss = th.cat([o['loss'] for o in outputs], 0).mean()
         acc = th.cat([o['acc'] for o in outputs], 0).mean()
         out = {'val_loss': loss, 'val_acc': acc}
+        logging.info(str(out))
         return {**out, 'log': out}
 
     def train_dataloader(self):
@@ -135,19 +139,25 @@ class IMDBSentimentClassifier(pl.LightningModule):
             shuffle=True,
         )
 
-    def configure_optimizers(self):
-        return th.optim.SGD(
+    def configure_optimizers(self): 
+        optimizer = th.optim.SGD(
             self.parameters(),
-            lr=FLAGS.lr,
+            lr=self.learning_rate,
             momentum=FLAGS.momentum,
         )
+        scheduler = th.optim.lr_scheduler.ReduceLROnPlateau(optimizer)
+        return {
+            'optimizer': optimizer,
+            'lr_scheduler': scheduler,
+            'monitor': 'val_loss'
+        }
 
 
 def main(_):
     logging.get_absl_handler().setFormatter(CustomPythonFormatter())
     logging.set_verbosity(logging.DEBUG)
 
-    model = IMDBSentimentClassifier()
+    model = IMDBSentimentClassifier(learning_rate=FLAGS.lr)
     trainer = pl.Trainer(
         default_root_dir='logs',
         gpus=(1 if th.cuda.is_available() else 0),
